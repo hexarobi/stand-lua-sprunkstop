@@ -1,4 +1,4 @@
--- SprunkStop v1.1
+-- SprunkStop v1.2
 -- a Lua script the Stand Mod Menu for GTA5
 -- Save this file in `Stand/Lua Scripts`
 -- by Hexarobo
@@ -135,7 +135,7 @@ local sprunk_vehicles = {
     },
     {
         model="stunt",
-        livery=1,
+        livery=2,
         type="plane",
     },
     {
@@ -156,12 +156,25 @@ local sprunk_vehicles = {
     {
         model="starling",
         livery=7,
+        type="plane",
+    },
+    {
+        model="blimp3",
+        livery=4,
         type="blimp",
+        is_random_spawn=false
     },
 }
 
 for _, sprunk_vehicle in pairs(sprunk_vehicles) do
     sprunk_vehicle.model_hash = util.joaat(sprunk_vehicle.model)
+end
+
+local random_spawn_vehicles = {}
+for _, sprunk_vehicle in pairs(sprunk_vehicles) do
+    if sprunk_vehicle.is_random_spawn ~= false then
+        table.insert(random_spawn_vehicles, sprunk_vehicle)
+    end
 end
 
 local function load_hash(hash)
@@ -312,7 +325,22 @@ local function sprunk_raindrop_vehicle(vehicle)
     sprunk_drop_vehicle(vehicle, get_rain_range())
 end
 
+local function vehicle_set_mod_max_value(vehicle, vehicle_mod)
+    local max = VEHICLE.GET_NUM_VEHICLE_MODS(vehicle, vehicle_mod) - 1
+    VEHICLE.SET_VEHICLE_MOD(vehicle, vehicle_mod, max)
+end
+
+local function vehicle_mods_set_max_performance(vehicle)
+    vehicle_set_mod_max_value(vehicle, 11)
+    vehicle_set_mod_max_value(vehicle, 13)
+    vehicle_set_mod_max_value(vehicle, 12)
+    vehicle_set_mod_max_value(vehicle, 16)
+    VEHICLE.TOGGLE_VEHICLE_MOD(vehicle, 18, true)
+end
+
 local function sprunkify_vehicle(vehicle)
+
+    vehicle_mods_set_max_performance(vehicle)
 
     -- Set Primary and Secondary colors
     local color = {r=0, g=255, b=0}
@@ -320,7 +348,9 @@ local function sprunkify_vehicle(vehicle)
     VEHICLE.SET_VEHICLE_MOD_COLOR_1(vehicle, 0, 0, 0)
     VEHICLE.SET_VEHICLE_CUSTOM_SECONDARY_COLOUR(vehicle, color.r, color.g, color.b)
     VEHICLE.SET_VEHICLE_MOD_COLOR_2(vehicle, 0, 0, 0)
-    -- VEHICLE.SET_VEHICLE_MOD(vehicle, 48, -1)
+
+    VEHICLE._SET_VEHICLE_INTERIOR_COLOR(vehicle, 55)
+    VEHICLE._SET_VEHICLE_DASHBOARD_COLOR(vehicle, 55)
 
     -- Green Headlights
     VEHICLE.TOGGLE_VEHICLE_MOD(vehicle, 22, true)
@@ -335,6 +365,10 @@ local function sprunkify_vehicle(vehicle)
 
     -- Set Wheel Color
     VEHICLE.SET_VEHICLE_EXTRA_COLOURS(vehicle, 0, 55)
+
+    -- Set Tire Smoke Color
+    VEHICLE.TOGGLE_VEHICLE_MOD(vehicle, 20, true)
+    VEHICLE.SET_VEHICLE_TYRE_SMOKE_COLOR(vehicle, 0, 255, 0)
 
     -- Set License Plate
     ENTITY.SET_ENTITY_AS_MISSION_ENTITY(vehicle, true, true)
@@ -362,8 +396,8 @@ menu.toggle_loop(menu.my_root(), "Sprunk Rain", {"sprunkrain"}, "Drop many cans 
     util.yield(config.can_rain_delay)
 end)
 
-menu.action(menu.my_root(), "Sprunk", {"sprunk"}, "Sprunk!", function(click_type, pid)
-    local sprunk_vehicle = sprunk_vehicles[math.random(1, #sprunk_vehicles)]
+menu.action(menu.my_root(), "Sprunk", {}, "Sprunk!", function(click_type, pid)
+    local sprunk_vehicle = random_spawn_vehicles[math.random(1, #random_spawn_vehicles)]
     local vehicle = spawn_vehicle_for_player(pid, sprunk_vehicle.model)
     if vehicle then
         sprunkify_vehicle(vehicle)
@@ -380,28 +414,24 @@ menu.action(menu.my_root(), "Sprunkify Vehicle", {"sprunkify"}, "Sprunkify your 
     end
 end, nil, nil, COMMANDPERM_FRIENDLY)
 
-menu.action(menu.my_root(), "Sprunkart", {"sprunkmobile"}, "Spawn a sprunkified go kart!", function(click_type, pid)
-    local vehicle = spawn_vehicle_for_player(pid, "veto2")
-    if vehicle then
-        sprunkify_vehicle(vehicle)
-    end
-end, nil, nil, COMMANDPERM_FRIENDLY)
-
---menu.action(menu.my_root(), "Sprunkffalo", {"sprunkfallo"}, "Spawn a Buffalo with the best livery ever", function()
---    menu.trigger_commands("spawn buffalo3")
---end)
-
 player_menu_actions = function(pid)
     menu.divider(menu.player_root(pid), "SprunkStop")
 
     menu.action(menu.player_root(pid), "Sprunk", {"sprunk"}, "Spawn a random Sprunk vehicle and some cans of Sprunk", function()
-        local sprunk_vehicle = sprunk_vehicles[math.random(1, #sprunk_vehicles)]
+        local sprunk_vehicle = random_spawn_vehicles[math.random(1, #random_spawn_vehicles)]
         local vehicle = spawn_vehicle_for_player(pid, sprunk_vehicle.model)
         if vehicle then
             sprunkify_vehicle(vehicle)
             for i = 1,10,1 do
                 sprunk_raindrop_vehicle(vehicle)
             end
+        end
+    end)
+
+    menu.action(menu.player_root(pid), "Sprunkify", {"sprunkify"}, "Sprunkify your vehicle!", function()
+        local vehicle = get_player_vehicle_in_control(pid)
+        if vehicle then
+            sprunkify_vehicle(vehicle)
         end
     end)
 
@@ -431,6 +461,13 @@ end)
 
 menu.slider(options_menu, "Rain Distance", {}, "Max distance cans can rain from the player", 1, 20, config.max_rain_distance, 1, function (value)
     config.max_rain_distance = value
+end)
+
+menu.slider(options_menu, "Max Rain Height", {}, "Max height cans can rain from the player", -10, 10, config.max_rain_distance, 1, function (value)
+    config.max_rain_height = value
+end)
+menu.slider(options_menu, "Min Rain Height", {}, "Min height cans can rain from the player", -10, 10, config.min_rain_height, 1, function (value)
+    config.min_rain_height = value
 end)
 
 util.create_tick_handler(function()
