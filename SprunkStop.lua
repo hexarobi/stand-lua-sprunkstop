@@ -97,19 +97,23 @@ local sprunk_vehicles = {
     },
     {
         model="sanchez",
-        livery=-1
+        livery=-1,
+        type="motorcycle",
     },
     {
         model="bf400",
-        livery=1
+        livery=1,
+        type="motorcycle",
     },
     {
         model="bati2",
-        livery=2
+        livery=3,
+        type="motorcycle",
     },
     {
         model="reever",
-        livery=9
+        livery=9,
+        type="motorcycle",
     },
     {
         model="formula",
@@ -121,11 +125,38 @@ local sprunk_vehicles = {
     },
     {
         model="veto2",
-        livery=0
+        livery=0,
+        type="gokart",
     },
     {
         model="pony",
-        livery=1
+        livery=2,
+        type="van",
+    },
+    {
+        model="stunt",
+        livery=1,
+        type="plane",
+    },
+    {
+        model="alphaz1",
+        livery=5,
+        type="plane",
+    },
+    {
+        model="microlight",
+        livery=4,
+        type="plane",
+    },
+    {
+        model="havok",
+        livery=2,
+        type="helicopter",
+    },
+    {
+        model="starling",
+        livery=7,
+        type="blimp",
     },
 }
 
@@ -289,7 +320,7 @@ local function sprunkify_vehicle(vehicle)
     VEHICLE.SET_VEHICLE_MOD_COLOR_1(vehicle, 0, 0, 0)
     VEHICLE.SET_VEHICLE_CUSTOM_SECONDARY_COLOUR(vehicle, color.r, color.g, color.b)
     VEHICLE.SET_VEHICLE_MOD_COLOR_2(vehicle, 0, 0, 0)
-    VEHICLE.SET_VEHICLE_MOD(vehicle, 48, -1)
+    -- VEHICLE.SET_VEHICLE_MOD(vehicle, 48, -1)
 
     -- Green Headlights
     VEHICLE.TOGGLE_VEHICLE_MOD(vehicle, 22, true)
@@ -317,6 +348,7 @@ local function sprunkify_vehicle(vehicle)
             target_livery = sprunk_vehicle.livery
         end
     end
+    VEHICLE.SET_VEHICLE_LIVERY(vehicle, target_livery)
     VEHICLE.SET_VEHICLE_MOD(vehicle, 48, target_livery)
 
 end
@@ -362,9 +394,20 @@ end, nil, nil, COMMANDPERM_FRIENDLY)
 player_menu_actions = function(pid)
     menu.divider(menu.player_root(pid), "SprunkStop")
 
+    menu.action(menu.player_root(pid), "Sprunk", {"sprunk"}, "Spawn a random Sprunk vehicle and some cans of Sprunk", function()
+        local sprunk_vehicle = sprunk_vehicles[math.random(1, #sprunk_vehicles)]
+        local vehicle = spawn_vehicle_for_player(pid, sprunk_vehicle.model)
+        if vehicle then
+            sprunkify_vehicle(vehicle)
+            for i = 1,10,1 do
+                sprunk_raindrop_vehicle(vehicle)
+            end
+        end
+    end)
+
     menu.action(menu.player_root(pid), "Sprunk Drop", {"sprunkdrop"}, "", function()
-        sprunk_drop(pid)
-    end, nil, nil, COMMANDPERM_FRIENDLY)
+        sprunk_raindrop_player(pid)
+    end)
 
     menu.toggle_loop(menu.player_root(pid), "Sprunk Rain", {"sprunkrain"}, "", function()
         sprunk_raindrop_player(pid)
