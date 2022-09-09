@@ -1,7 +1,9 @@
--- SprunkStop v1.3
+-- SprunkStop
 -- a Lua script the Stand Mod Menu for GTA5
 -- Save this file in `Stand/Lua Scripts`
 -- by Hexarobo
+
+local SCRIPT_VERSION = "1.3.1"
 
 local auto_update_source_url = "https://raw.githubusercontent.com/hexarobi/stand-lua-sprunkstop/main/SprunkStop.lua"
 local status, lib = pcall(require, "auto-updater")
@@ -723,6 +725,17 @@ menu.slider(options_menu, "Blimp Spawn Radius", {}, "The amount of happy blimps 
     config.blimp_spawn_radius = value
 end)
 
+---
+--- Script Meta
+---
+
+local script_meta_menu = menu.list(menu.my_root(), "Script Meta")
+
+menu.divider(script_meta_menu, SCRIPT_NAME:gsub(".lua", ""))
+menu.readonly(script_meta_menu, "Version", SCRIPT_VERSION)
+menu.hyperlink(script_meta_menu, "Source", "https://github.com/hexarobi/stand-lua-sprunkstop", "View source files on Github")
+
+
 util.create_tick_handler(function()
     blimp_control_loop(players.user())
     util.yield(100)
@@ -734,3 +747,4 @@ util.create_tick_handler(function()
     end
     return true
 end)
+
