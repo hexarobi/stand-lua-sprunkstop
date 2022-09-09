@@ -1,7 +1,22 @@
--- SprunkStop v1.2
+-- SprunkStop v1.3
 -- a Lua script the Stand Mod Menu for GTA5
 -- Save this file in `Stand/Lua Scripts`
 -- by Hexarobo
+
+local auto_update_source_url = "https://raw.githubusercontent.com/hexarobi/stand-lua-sprunkstop/main/SprunkStop.lua"
+local status, lib = pcall(require, "auto-updater")
+if not status then
+    async_http.init("raw.githubusercontent.com", "/hexarobi/stand-lua-auto-updater/main/auto-updater.lua",
+            function(result, headers, status_code) local error_prefix = "Error downloading auto-updater: "
+                if status_code ~= 200 then util.toast(error_prefix..status_code) return false end
+                if not result or result == "" then util.toast(error_prefix.."Found empty file.") return false end
+                local file = io.open(filesystem.scripts_dir() .. "lib\\auto-updater.lua", "wb")
+                if file == nil then util.toast(error_prefix.."Could not open file for writing.") return false end
+                file:write(result) file:close() util.toast("Successfully installed auto-updater lib")
+            end, function() util.toast("Error downloading auto-updater lib. Update failed to download.") end)
+    async_http.dispatch() util.yield(3000) require("auto-updater")
+end
+run_auto_update({source_url=auto_update_source_url, script_relpath=SCRIPT_RELPATH})
 
 util.require_natives(1651208000)
 
@@ -11,6 +26,12 @@ local config = {
     max_rain_distance = 3,
     min_rain_height = 2,
     max_rain_height = 4,
+    sprunkify_bomb_radius = 500,
+    num_happy_blimps = 4,
+    blimp_speed = 15,
+    blimp_spawn_radius = 500,
+    blimp_ttl = 300000,
+    blimp_ttl_jitter = 1000,
     --can_rain_range = {
     --    x_max=3, y_max=3, z_max=4,
     --    x_min=-3, y_min=-3, z_min=2,
@@ -166,6 +187,26 @@ local sprunk_vehicles = {
     },
 }
 
+-- From https://stackoverflow.com/questions/12394841/safely-remove-items-from-an-array-table-while-iterating
+local function array_remove(t, fnKeep)
+    local j, n = 1, #t;
+
+    for i=1,n do
+        if (fnKeep(t, i, j)) then
+            -- Move i's kept value to j's position, if it's not already there.
+            if (i ~= j) then
+                t[j] = t[i];
+                t[i] = nil;
+            end
+            j = j + 1; -- Increment position of where we'll place the next kept value.
+        else
+            t[i] = nil;
+        end
+    end
+
+    return t;
+end
+
 for _, sprunk_vehicle in pairs(sprunk_vehicles) do
     sprunk_vehicle.model_hash = util.joaat(sprunk_vehicle.model)
 end
@@ -264,27 +305,55 @@ local function spawn_vehicle_for_player(pid, model_name)
     end
 end
 
+local function delete_spawned_object(spawned_object)
+    if spawned_object.pilot_handle then
+        entities.delete_by_handle(spawned_object.pilot_handle)
+    end
+    entities.delete_by_handle(spawned_object.handle)
+end
+
 local function cleanup_spawned_objects()
     local current_time = util.current_time_millis()
-    for _, spawned_object in pairs(spawned_objects) do
+    for i, spawned_object in pairs(spawned_objects) do
         local lifetime = current_time - spawned_object.spawn_time
-        if lifetime > config.can_lifetime then
-            entities.delete_by_handle(spawned_object.handle)
+        local allowed_lifetime = config.can_lifetime
+        if spawned_object.ttl ~= nil then
+            allowed_lifetime = spawned_object.ttl
+        end
+        if lifetime > allowed_lifetime then
+            delete_spawned_object(spawned_object)
+            table.remove(spawned_objects, i)
+            if spawned_object.respawn_function then
+                spawned_object.respawn_function(spawned_object.pid)
+            end
         end
     end
 end
 
-local function spawn_sprunk_can(pos)
-    local pickup_hash = util.joaat("ng_proc_sodacan_01b")
+local function clear_blimps()
+    array_remove(spawned_objects, function(t, i, j)
+        local spawned_object = t[i]
+        if spawned_object.type == "blimp" then
+            delete_spawned_object(spawned_object)
+            return false
+        end
+        return true
+    end)
+end
+
+local function spawn_object_at_pos(pos, model, ttl)
+    local pickup_hash = util.joaat(model)
     load_hash(pickup_hash)
     local pickup_pos = v3.new(pos.x, pos.y, pos.z)
     local pickup = entities.create_object(pickup_hash, pickup_pos)
     ENTITY.SET_ENTITY_COLLISION(pickup, true, true)
+    --ENTITY.SET_ENTITY_HAS_GRAVITY(pickup, true)
+    --OBJECT.SET_OBJECT_PHYSICS_PARAMS(pickup, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0)
     ENTITY.APPLY_FORCE_TO_ENTITY_CENTER_OF_MASS(
-        pickup, 1, 0, 0, 0,
+        pickup, 5, 0, 0, 1,
         true, false, true, true
     )
-    table.insert(spawned_objects, { handle=pickup, spawn_time=util.current_time_millis()})
+    table.insert(spawned_objects, { handle=pickup, spawn_time=util.current_time_millis(), ttl=ttl})
 end
 
 local function nearby_position(pos, range)
@@ -301,12 +370,15 @@ local function nearby_position(pos, range)
     }
 end
 
-local function sprunk_can_drop(position, range)
+local function sprunk_can_drop(position, range, model, ttl)
     local spawn_position = position
     if range then
         spawn_position = nearby_position(position, range)
     end
-    spawn_sprunk_can(spawn_position)
+    if model == nil then
+        model = "ng_proc_sodacan_01b"
+    end
+    spawn_object_at_pos(spawn_position, model, ttl)
 end
 
 local function sprunk_drop_player(pid, range)
@@ -387,6 +459,37 @@ local function sprunkify_vehicle(vehicle)
 
 end
 
+local currently_dumping = false
+local function trash_dump_player(pid)
+    if currently_dumping then
+        -- Only allow one dump at a time to avoid overloading models
+        return
+    end
+    currently_dumping = true
+    local NUM_CANS_TO_DROP = 100
+    local num_cans_dropped = 0
+    repeat
+        local can_models = {
+            -- "ng_proc_sodacan_01b",
+            "ng_proc_sodacan_02b",
+            "ng_proc_sodacan_02d",
+            "ng_proc_sodacan_03b"
+        }
+        sprunk_can_drop(
+                players.get_position(pid),
+                {
+                    x_max=1, y_max=1, z_max=4,
+                    x_min=-1, y_min=-1, z_min=2,
+                },
+                can_models[math.random(1, #can_models)],
+                15000
+        )
+        num_cans_dropped = num_cans_dropped + 1
+        util.yield(10)
+    until num_cans_dropped >= NUM_CANS_TO_DROP
+    currently_dumping = false
+end
+
 menu.action(menu.my_root(), "Sprunk Drop", {"sprunkdrop"}, "Drop a single can of sprunk near you", function()
     sprunk_drop(players.user())
 end)
@@ -413,6 +516,136 @@ menu.action(menu.my_root(), "Sprunkify Vehicle", {"sprunkify"}, "Sprunkify your 
         sprunkify_vehicle(vehicle)
     end
 end, nil, nil, COMMANDPERM_FRIENDLY)
+
+menu.action(menu.my_root(), "Can Dump", {"ecola"}, "Can dump someone!", function(click_type)
+    local pid = players.user()
+    trash_dump_player(pid)
+end, nil, nil, COMMANDPERM_FRIENDLY)
+
+menu.action(menu.my_root(), "SprunkifyBomb", {}, "Sprunkifies all nearby vehicles!", function(click_type)
+    local ped = PLAYER.GET_PLAYER_PED_SCRIPT_INDEX(players.user())
+    local pos = ENTITY.GET_ENTITY_COORDS(ped, 1)
+    local range = 100
+    local nearby_vehicles = entities.get_all_vehicles_as_handles()
+    local count = 0
+    for _, vehicle in ipairs(nearby_vehicles) do
+        local vehicle_pos = ENTITY.GET_ENTITY_COORDS(vehicle, 1)
+        local distance = SYSTEM.VDIST(pos.x, pos.y, pos.z, vehicle_pos.x, vehicle_pos.y, vehicle_pos.z)
+        if distance <= range then
+            sprunkify_vehicle(vehicle)
+            count = count + 1
+        end
+    end
+    util.toast(count.." vehicles sprunkified!")
+end)
+
+local happy_blimps_toggle = false
+
+local function blimp_control_loop(pid)
+    if not happy_blimps_toggle then
+        return
+    end
+
+    for i, spawned_object in pairs(spawned_objects) do
+        if spawned_object.type == "blimp" then
+
+            --if math.random(1, 10) == 1 then
+            --    util.toast("new direction "..i)
+            --    local target_pos = ENTITY.GET_OFFSET_FROM_ENTITY_IN_WORLD_COORDS(
+            --            PLAYER.GET_PLAYER_PED_SCRIPT_INDEX(pid),
+            --            math.random(-config.blimp_spawn_radius, config.blimp_spawn_radius),
+            --            math.random(-config.blimp_spawn_radius, config.blimp_spawn_radius),
+            --            1000
+            --    )
+            --    TASK.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE(
+            --            spawned_object.pilot_handle, spawned_object.handle,
+            --            target_pos.x, target_pos.y, target_pos.z, 100.0, 786603, 0.0
+            --    )
+            --end
+            VEHICLE.SET_VEHICLE_FORWARD_SPEED(spawned_object.handle, config.blimp_speed)
+
+        end
+    end
+
+end
+
+local function spawn_sprunk_blimp(pid)
+    if not happy_blimps_toggle then
+        return
+    end
+
+    local vehicle_hash = util.joaat('blimp3')
+    local ped_hash = util.joaat("s_m_m_pilot_01")
+    load_hash(vehicle_hash)
+    load_hash(ped_hash)
+
+    local target_ped = PLAYER.GET_PLAYER_PED_SCRIPT_INDEX(pid)
+    local pos = ENTITY.GET_OFFSET_FROM_ENTITY_IN_WORLD_COORDS(
+        target_ped,
+        math.random(-config.blimp_spawn_radius, config.blimp_spawn_radius),
+        math.random(-config.blimp_spawn_radius, config.blimp_spawn_radius),
+        math.random(350, 500)
+    )
+
+    --if pos.z > 100 then
+    --    pos.z = 100
+    --end
+
+    local aircraft = entities.create_vehicle(vehicle_hash, pos, math.random(0, 360))
+    sprunkify_vehicle(aircraft)
+    VEHICLE.SET_VEHICLE_ENGINE_ON(aircraft, true, true, false)
+    VEHICLE.SET_HELI_BLADES_FULL_SPEED(aircraft)
+    VEHICLE.SET_VEHICLE_FORWARD_SPEED(aircraft, VEHICLE.GET_VEHICLE_ESTIMATED_MAX_SPEED(aircraft)/4)
+
+    local pilot = entities.create_ped(1, ped_hash, pos, 0.0)
+    PED.SET_PED_INTO_VEHICLE(pilot, aircraft, -1)
+    PED.SET_PED_KEEP_TASK(pilot, true)
+
+    --for i = 1,1,10 do
+    --    util.toast("new direction")
+    --    local target_pos = ENTITY.GET_OFFSET_FROM_ENTITY_IN_WORLD_COORDS(
+    --            target_ped,
+    --            math.random(-config.blimp_spawn_radius, config.blimp_spawn_radius),
+    --            math.random(-config.blimp_spawn_radius, config.blimp_spawn_radius),
+    --            1000
+    --    )
+    --    TASK.TASK_VEHICLE_DRIVE_TO_COORD_LONGRANGE(pilot, aircraft, target_pos.x, target_pos.y, target_pos.z, 100.0, 786603, 0.0)
+    --    util.yield(1)
+    --end
+
+    local blip = HUD.ADD_BLIP_FOR_ENTITY(aircraft)
+    HUD.SET_BLIP_SPRITE(blip, 638)
+    HUD.SET_BLIP_COLOUR(blip, 69)
+
+    local ttl = config.blimp_ttl + math.random(-config.blimp_ttl_jitter, config.blimp_ttl_jitter)
+    local blimp_object = {
+        handle=aircraft,
+        type="blimp",
+        spawn_time=util.current_time_millis(),
+        ttl=ttl,
+        respawn_function=spawn_sprunk_blimp,
+        pid=pid,
+        pilot_handle=pilot,
+    }
+    table.insert(spawned_objects, blimp_object)
+
+end
+
+menu.toggle(menu.my_root(), "Happy Blimps", {}, "Some blimps to just hang around and represent Sprunk!", function(on)
+    happy_blimps_toggle = on
+    if on then
+        for i = 1, config.num_happy_blimps, 1 do
+            spawn_sprunk_blimp(players.user())
+        end
+    else
+        clear_blimps()
+    end
+end)
+
+menu.toggle_loop(menu.my_root(), "Purchase Loop", {}, "Standing in front a Sprunk machine? Keep on Sprunkin'", function()
+    PAD._SET_CONTROL_NORMAL(0, 51, 1)
+    util.yield(math.random(9000, 11000))
+end)
 
 player_menu_actions = function(pid)
     menu.divider(menu.player_root(pid), "SprunkStop")
@@ -444,6 +677,10 @@ player_menu_actions = function(pid)
         util.yield(config.can_rain_delay)
     end)
 
+    menu.action(menu.player_root(pid), "Trash Dump Sprunk Cans", {"ecola"}, "", function()
+        trash_dump_player(pid)
+    end)
+
 end
 players.on_join(player_menu_actions)
 players.dispatch_on_join()
@@ -462,12 +699,33 @@ end)
 menu.slider(options_menu, "Rain Distance", {}, "Max distance cans can rain from the player", 1, 20, config.max_rain_distance, 1, function (value)
     config.max_rain_distance = value
 end)
-
 menu.slider(options_menu, "Max Rain Height", {}, "Max height cans can rain from the player", -10, 10, config.max_rain_distance, 1, function (value)
     config.max_rain_height = value
 end)
 menu.slider(options_menu, "Min Rain Height", {}, "Min height cans can rain from the player", -10, 10, config.min_rain_height, 1, function (value)
     config.min_rain_height = value
+end)
+
+menu.slider(options_menu, "Sprunkify Bomb Radius", {}, "How far out should sprunkify bomb effect", 50, 10000, config.sprunkify_bomb_radius, 50, function (value)
+    config.sprunkify_bomb_radius = value
+end)
+
+menu.slider(options_menu, "Number of Blimps", {}, "The amount of happy blimps to spawn", 1, 10, config.num_happy_blimps, 1, function (value)
+    config.num_happy_blimps = value
+end)
+menu.slider(options_menu, "Blimp Speed", {}, "The speed of each happy blimp", 1, 60, config.blimp_speed, 1, function (value)
+    config.blimp_speed = value
+end)
+menu.slider(options_menu, "Blimp Lifetime", {}, "The lifetime of each happy blimp in minutes", 1, 10, config.blimp_ttl / 60000, 1, function (value)
+    config.blimp_ttl = value * 60000
+end)
+menu.slider(options_menu, "Blimp Spawn Radius", {}, "The amount of happy blimps to spawn", 100, 2000, config.blimp_spawn_radius, 100, function (value)
+    config.blimp_spawn_radius = value
+end)
+
+util.create_tick_handler(function()
+    blimp_control_loop(players.user())
+    util.yield(100)
 end)
 
 util.create_tick_handler(function()
