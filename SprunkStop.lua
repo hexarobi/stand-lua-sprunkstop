@@ -3,7 +3,7 @@
 -- Save this file in `Stand/Lua Scripts`
 -- by Hexarobo
 
-local SCRIPT_VERSION = "1.3.1"
+local SCRIPT_VERSION = "1.3.2"
 
 local auto_update_source_url = "https://raw.githubusercontent.com/hexarobi/stand-lua-sprunkstop/main/SprunkStop.lua"
 local status, lib = pcall(require, "auto-updater")
@@ -493,7 +493,7 @@ local function trash_dump_player(pid)
 end
 
 menu.action(menu.my_root(), "Sprunk Drop", {"sprunkdrop"}, "Drop a single can of sprunk near you", function()
-    sprunk_drop(players.user())
+    sprunk_can_drop(players.get_position(players.user()))
 end)
 
 menu.toggle_loop(menu.my_root(), "Sprunk Rain", {"sprunkrain"}, "Drop many cans of sprunk near you", function()
@@ -747,4 +747,5 @@ util.create_tick_handler(function()
     end
     return true
 end)
+
 
